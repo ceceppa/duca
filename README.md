@@ -17,7 +17,7 @@ it _does_ not contain MySQL server and a shared MySQL instanced is intended to b
 
 ## Setup
 
-1. Built the image
+1. Build the image
 2. Create the network
 3. MySQL container
 4. Nginx reverse proxy
