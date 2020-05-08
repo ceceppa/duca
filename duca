@@ -1,0 +1,244 @@
+#!/bin/bash
+
+# Shell colours
+RED='\033[1;31m'
+NC='\033[0m'
+GREEN='\033[0;32m'
+BLUE='\033[1;36m'
+MAGENTA='\e[35m'
+YELLOW='\e[93m'
+CYAN='\e[96m'
+
+# Symbols
+X_SYMBOL='\u2A2F'
+CHECK_SYMBOL='\u2713'
+
+# Variables
+DOWNLOAD_WP=0
+UPDATE_DOCKER_IMAGE=0
+IMAGE_TYPE=""
+
+# mkcert for self-signed certificate
+# https://github.com/FiloSottile/mkcert
+MKCERT_PATH=$(which mkcert)
+
+# reset the log file content
+echo '' > /tmp/duca.log
+echo '' > /tmp/duca.log.error
+
+#
+# Output the give message prepend by the check symbol and coloured
+#
+function log_done() {
+  printf "${GREEN}${CHECK_SYMBOL} ${CYAN}${1}${NC}\n"
+}
+
+#
+# Output the error using nice colours
+#
+function log_error() {
+  if [ ! -z "$2" ]; then
+    printf "\n\n${YELLOW}Command: ${NC} ${2}\n"
+    cat /tmp/duca.log
+    printf "\n\n${RED}${X_SYMBOL} $1${NC}\n\n"
+  else
+    printf "\n${RED}${X_SYMBOL} $1${NC}\n"
+    printf "\n"
+  fi
+
+  # Restore the cursor
+  tput cnorm
+
+  exit 1
+}
+
+#
+# Run the command passed as 1st argument and shows the spinner until this is done
+#
+# @param String $1 the command to run
+# @param String $2 the title to show next the spinner
+# @param String $3 if set to 1 it will not perform the check on the exit status of the function
+#
+function execute_and_wait() {
+  eval $1 >>/tmp/duca.log 2>>/tmp/duca.log.error &
+  pid=$!
+  delay=0.05
+
+  #
+  # Bash on osX is outdated -.-"
+  #
+  frames=('\u280B' '\u2819' '\u2839' '\u2838' '\u283C' '\u2834' '\u2826' '\u2827' '\u2807' '\u280F')
+
+  echo "$pid" >"/tmp/.spinner.pid"
+
+  # Hide the cursor, it looks ugly :D
+  tput civis
+  index=0
+  framesCount=${#frames[@]}
+  while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
+    printf "${YELLOW}${frames[$index]}${NC} ${GREEN}$2${NC}"
+
+    let index=index+1
+    if [ "$index" -ge "$framesCount" ]; then
+      index=0
+    fi
+
+    printf "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
+    sleep $delay
+  done
+
+  # Remove the spinner
+  # printf "                                                                \b\n"
+
+  #
+  # Wait the command to be finished, this is needed to capture its exit status
+  #
+  wait $!
+
+  # Do I have to check the exit status?
+  exitCode=$?
+  if [ -z "$3" ]; then
+    if [ "$exitCode" -ne "0" ]; then
+      msg=${3:-"$2 failed"}
+
+      log_error "$msg" "$1"
+    else
+      # Print the "Waiting message" prefixed with the success symbol
+      log_done "$2"
+    fi
+  else
+    log_done "$2"
+  fi
+
+  # Restore the cursor
+  tput cnorm
+}
+
+#
+# Generate and install the certificates using mkcert
+#
+function generate_and_install_certificates() {
+  cd $(mkcert -CAROOT)
+  execute_and_wait "mkcert ${SITENAME}.localhost" "Generating self-signed certificate"
+  execute_and_wait "mkcert -install" "Installing self-signed certificate"
+
+  # Copy the certificates for nginx
+  sudo cp ${SITENAME}.localhost-key.pem /etc/nginx/certs/${SITENAME}.localhost.key
+  sudo cp ${SITENAME}.localhost.pem /etc/nginx/certs/${SITENAME}.localhost.crt
+
+  execute_and_wait "docker container restart nginx-proxy" "Restarting docker nginx-proxy container"
+}
+
+#
+# Print the help page
+#
+function show_help() {
+  printf "${RED}DUCA: My docker image for local PHP, WordPress and Laravel development${NC}\n\n"
+  printf "${GREEN}Usage:${NC}\n"
+  printf "  duca [options] [project-name]\n\n"
+  printf "  ${BLUE}OPTIONS:${NC}\n"
+  printf "    -w configure container for WordPress development\n"
+  printf "    -l configure container for Laravel development\n"
+  printf "    -d download WordPress\n"
+  printf "    -u download and compile the docker image\n"
+  exit 0
+}
+
+function ask_to_remove() {
+  printf "${RED}The container $SITENAME already exists. ${NC}\n"
+  [[ "$(read -e -p 'Do you want to remove it ? [y/N]> '; echo $REPLY)" == [Yy]* ]] && return
+
+  exit
+}
+
+# Commands
+if [ "$#" -lt 1 ]; then
+  show_help
+fi
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  key="$1"
+
+  case $key in
+  -w)
+    IMAGE_TYPE="wp"
+    shift
+    ;;
+  -l)
+    IMAGE_TYPE="laravel"
+    shift
+    ;;
+  -d)
+    DOWNLOAD_WP=1
+    shift
+    ;;
+  -u)
+    UPDATE_DOCKER_IMAGE=1
+    shift
+    ;;
+  *) # unknown option
+    SITENAME="$1"
+    POSITIONAL+=("$1") # save it in an array for later
+    shift              # past argument
+    ;;
+  esac
+done
+set -- "${POSITIONAL[@]}" # restore positional parameters
+
+if [ -z "$SITENAME" ] || [ -z "$IMAGE_TYPE" ]; then
+  show_help
+fi
+
+printf "${YELLOW}DUCA${NC}"
+printf "\n\t${BLUE}URL: ${YELLOW}https://${SITENAME}.localhost${NC}"
+printf "\n\t${BLUE}Folder: ${YELLOW}$(pwd)/$SITENAME${NC}"
+printf "\n\t${BLUE}COnfiguration: ${YELLOW}${IMAGE_TYPE}${NC}"
+printf "\n\t${BLUE}Image: ${YELLOW}${IMAGE_TYPE}dev${NC}"
+printf "\n\t${BLUE}Container name: ${YELLOW}${SITENAME}${NC}\n\n"
+
+# Update container
+if [ "$UPDATE_DOCKER_IMAGE" -eq 1 ]; then
+  printf "${YELLOW}Updating Duca image: ${IMATE_TYPE}dev\n${NC}"
+
+  rm -rf /tmp/duca
+  execute_and_wait "git clone git@gitlab.com:ceceppa/duca.git /tmp/duca" "Cloning image"
+
+  cd /tmp/duca
+  execute_and_wait "docker build --no-cache --build-arg config=${IMAGE_TYPE} -t ${IMAGE_TYPE}dev ." "Building docker image: ${YELLOW}${IMAGE_TYPE}dev"
+
+  # Create docker container
+  cd - # Return to the previous path
+fi
+
+# Create the folder
+if [ ! -d "$SITENAME" ]; then
+  mkdir $SITENAME
+fi
+
+# Check if the container alredy exists
+docker container inspect $SITENAME > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+  ask_to_remove
+
+  execute_and_wait "docker container rm -f $SITENAME" "Removing old container"
+fi
+
+PROJECT_PATH=$(pwd)/$SITENAME
+execute_and_wait "docker container run -d --name $SITENAME --link mysql:db --network ducanet -e VIRTUAL_HOST=${SITENAME}.localhost -v ${PROJECT_PATH}:/var/www/html ${IMAGE_TYPE}dev" "Creating docker container"
+
+# Install WordPress?
+if [ "$DOWNLOAD_WP" -eq 1 ]; then
+  cd $PROJECT_PATH
+  execute_and_wait "curl -#L https://wordpress.org/latest.zip | bsdtar -xvf- --strip 1" "Downloading & decompressing WordPress"
+fi
+
+# Generate and install self signed certificates?
+if [ ! -z MKCERT_PATH ]; then
+  generate_and_install_certificates
+fi
+
+printf "\n\n"
+log_done "DONE, ${YELLOW}Happy coding :)${NC}"
+
+printf "\n"

@@ -1,0 +1,35 @@
+#create network
+docker network create --subnet=172.18.0.0/16 nine3net
+
+# WP
+docker container run -d --name nine3doc --link mysql:db --network nine3net -e VIRTUAL_HOST=nine3.doc -v /home/alex/Progetti/www/nine3doc/htdocs:/var/www/html -v /home/alex/Progetti/www/nine3doc/logs:/var/log/nginx nine3wp
+
+#nginx proxy
+docker run -d --name nginx-proxy --network nine3net -p 80:80 -v /var/run/docker.sock:/tmp/docker.sock:ro jwilder/nginx-proxy
+
+#Phpmyadmin
+docker run --name phpmyadmin -d --link mysql:db --network nine3net -e VIRTUAL_HOST=phpmyadmin.dev phpmyadmin/phpmyadmin
+
+#mysql
+docker run --name mysql --network nine3net --ip 172.18.0.254 -e MYSQL_ROOT_PASSWORD=nine3pass -p 6603:3306 -v /home/alex/Progetti/mysql:/var/lib/mysql -d mysql/mysql-server
+
+## Enable remote connections
+docker exec -t -i mysql bash
+env # TO check the MYSQL_ROOT_PASSWORD
+mysql -u nine3 -p
+GRANT ALL PRIVILEGES ON *.* to 'nine3'@'%';
+
+## Build
+docker build . -t nine3wp
+
+# Mysql
+https://dev.mysql.com/doc/refman/5.7/en/adding-users.html
+
+docker container run -d --name example -p 8080:80 -p 9000:9000 -e XDEBUG_CONFIG="remote_host=192.168.0.13" -v /home/alex/Progetti/www/asenese/htdocs:/var/www -v /home/alex/Progetti/www/asenese/logs:/var/log/nginx n3wordpress
+
+docker container run -d --name example -e VIRTUAL_HOST=a.example.com -v asenese:/home/alex/Progetti/www/asenese n3wordpress
+docker container run -d --name example -p 8080:80 -v /home/alex/Progetti/www/asenese:/var/www -v /home/alex/Progetti/www/logs:/var/log/nginx n3wordpress
+
+
+# Start all
+docker container start mysql phpmyadmin nginx-proxy nine3doc
